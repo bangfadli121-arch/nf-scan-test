@@ -1,0 +1,40 @@
+name: nf-test-scan
+on:
+  workflow_dispatch:
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Install nuclei + httpx
+        run: |
+          set -e
+          mkdir -p "$HOME/bin"
+          curl -sL -o /tmp/nuclei.zip https://github.com/projectdiscovery/nuclei/releases/download/v3.11.1/nuclei_3.11.1_linux_amd64.zip
+          unzip -o -q /tmp/nuclei.zip -d "$HOME/bin" nuclei
+          curl -sL -o /tmp/httpx.zip https://github.com/projectdiscovery/httpx/releases/download/v1.12.0/httpx_1.12.0_linux_amd64.zip
+          unzip -o -q /tmp/httpx.zip -d "$HOME/bin" httpx
+          chmod +x "$HOME/bin/nuclei" "$HOME/bin/httpx"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+          nuclei -version
+          httpx -version
+      - name: Update nuclei templates
+        run: nuclei -update-templates
+      - name: Probe target
+        run: |
+          echo "https://testphp.vulnweb.com/" | httpx -silent -status-code -title -tech-detect
+      - name: Nuclei scan (xss,sqli tags)
+        run: |
+          set +e
+          date -u +"scan start: %Y-%m-%dT%H:%M:%SZ"
+          nuclei -u https://testphp.vulnweb.com/ -tags xss,sqli -severity low,medium,high,critical -o nuclei-results.txt -silent
+          echo "nuclei exit code: $?"
+          date -u +"scan end: %Y-%m-%dT%H:%M:%SZ"
+          wc -l nuclei-results.txt || echo "no results file"
+          head -30 nuclei-results.txt || true
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: nf-test-results
+          path: nuclei-results.txt
+          if-no-files-found: warn
