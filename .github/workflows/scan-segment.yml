@@ -5,7 +5,7 @@ on:
       segment:
         description: 'Segment file to scan (under segments/, one URL per line)'
         required: true
-        default: 'seg-04'
+        default: 'seg-05'
         type: choice
         options:
           - seg-01
