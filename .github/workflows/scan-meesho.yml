@@ -38,11 +38,12 @@ on:
           - investor.meesho.com
           - meesho.io
       mode:
-        description: 'Scan mode (deep = 50 req/s, fast = 200 req/s)'
+        description: 'Scan mode (slow = 20 req/s, deep = 50, fast = 200)'
         required: true
-        default: 'deep'
+        default: 'slow'
         type: choice
         options:
+          - slow
           - fast
           - deep
 jobs:
@@ -106,9 +107,9 @@ jobs:
           OUT="meesho-output/$TARGET"
           mkdir -p "$OUT"
           echo "https://$TARGET" > "$OUT/segment.txt"
-          # Rate mirrors NucleiFuzzer: --fast = 200/s, --deep = 50/s (program has no
-          # explicit req/s cap; WF program max is 500/s — never exceed it).
-          if [ "${{ inputs.mode }}" = "fast" ]; then RATE=200; else RATE=50; fi
+          # Rate: Meesho policy states no explicit req/s cap but forbids tools that
+          # disrupt production — default slow 20/s (prep note 10-25/s); deep 50, fast 200.
+          if [ "${{ inputs.mode }}" = "fast" ]; then RATE=200; elif [ "${{ inputs.mode }}" = "deep" ]; then RATE=50; else RATE=20; fi
           echo "mode: ${{ inputs.mode }} | rate: $RATE/s | severity: critical,high,medium,low | header: X-Hackerone: jelalossfind12"
           # NOTE: katana discovery may surface links to OTHER *.meesho.com subdomains —
           # those are OUT OF SCOPE (wildcard OOS). Filter discovery output to the exact
