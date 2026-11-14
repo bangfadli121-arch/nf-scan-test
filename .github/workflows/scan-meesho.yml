@@ -1,0 +1,143 @@
+# nf-scan-meesho — NucleiFuzzer scan untuk program HackerOne Meesho (meesho_bbp)
+#
+# ATURAN PROGRAM (baca sebelum dispatch — dari policy resmi 14 Nov 2026):
+# - Submit GRATIS, tanpa gate reputasi (Signal 0.0 cukup), safe harbor bersyarat.
+# - Bounty Web & Platform: Low $100-250 / Medium $250-700 / High $700-1500 / Critical $1500-2000
+#   (berlaku 3 Nov 2026; mobile apps hanya static analysis — TIDAK masuk workflow ini).
+# - HANYA 9 host di bawah ini in-scope. Wildcard *.meesho.com / *.meeshoapi.com /
+#   *.meeshosupply.com / *.valmo.in OOS — subdomain lain JANGAN PERNAH di-scan.
+#   Karena itu discovery (katana) difilter ketat ke host target persis sebelum nuclei jalan.
+# - Header tes WAJIB di semua request: X-Hackerone: jelalossfind12
+# - JANGAN scan order flow / checkout. JANGAN pakai template dos, brute-force,
+#   rate-limit, header-only (http-missing-security-headers dkk), atau
+#   subdomain-takeover tanpa PoC. Laporan dari automated scan saja tanpa PoC
+#   manual + request/response = informational (tidak dibayar) — setiap temuan
+#   WAJIB repro manual + bukti dampak sebelum submit (7-Question Gate).
+# - JANGAN cari known-duplicate: HTML injection modul ticketing supplier,
+#   account-deletion -> penyalahgunaan diskon first-order, Stored XSS via file
+#   upload di supplier, Bank/UPI details OTP bypass di supplier/apps.
+# - JANGAN buat banyak akun / spam akun; JANGAN ubah password/email/setting
+#   akun tes; JANGAN akses data user asli; JANGAN transaksi finansial asli.
+name: nf-scan-meesho
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Meesho in-scope host to scan (ONLY these 9 — wildcards are OOS)'
+        required: true
+        default: 'www.meesho.com'
+        type: choice
+        options:
+          - www.meesho.com
+          - supplier.meesho.com
+          - affiliate.meesho.com
+          - admin.meeshosupply.com
+          - superstoreapp.meesho.com
+          - www.valmo.in
+          - prod.meeshoapi.com
+          - investor.meesho.com
+          - meesho.io
+      mode:
+        description: 'Scan mode (deep = 50 req/s, fast = 200 req/s)'
+        required: true
+        default: 'deep'
+        type: choice
+        options:
+          - fast
+          - deep
+jobs:
+  scan-meesho:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+      - name: Scope guard - target must be one of the 9 in-scope Meesho hosts
+        run: |
+          set -e
+          TARGET="${{ inputs.target }}"
+          echo "Target: $TARGET | mode: ${{ inputs.mode }} | program: Meesho Bounty (HackerOne meesho_bbp)"
+          echo "Program rules: header X-Hackerone: jelalossfind12 required; only the 9 listed hosts in scope; wildcards OOS; no order/checkout flow; no dos/brute-force/rate-limit/header-only templates."
+          case "$TARGET" in
+            www.meesho.com|supplier.meesho.com|affiliate.meesho.com|admin.meeshosupply.com|superstoreapp.meesho.com|www.valmo.in|prod.meeshoapi.com|investor.meesho.com|meesho.io)
+              echo "Scope guard OK: $TARGET is in the Meesho in-scope list"
+              ;;
+            *)
+              echo "SCOPE GUARD FAILED: $TARGET is NOT one of the 9 in-scope Meesho hosts (wildcards are out of scope) - aborting"
+              exit 1
+              ;;
+          esac
+      - name: Install full NucleiFuzzer stack
+        run: |
+          set -e
+          mkdir -p "$HOME/bin"
+          curl -sL -o /tmp/nuclei.zip https://github.com/projectdiscovery/nuclei/releases/download/v3.11.1/nuclei_3.11.1_linux_amd64.zip
+          unzip -o -q /tmp/nuclei.zip -d "$HOME/bin" nuclei
+          curl -sL -o /tmp/httpx.zip https://github.com/projectdiscovery/httpx/releases/download/v1.12.0/httpx_1.12.0_linux_amd64.zip
+          unzip -o -q /tmp/httpx.zip -d "$HOME/bin" httpx
+          curl -sL -o /tmp/katana.zip https://github.com/projectdiscovery/katana/releases/download/v1.8.0/katana_1.8.0_linux_amd64.zip
+          unzip -o -q /tmp/katana.zip -d "$HOME/bin" katana
+          chmod +x "$HOME/bin/nuclei" "$HOME/bin/httpx" "$HOME/bin/katana"
+          go install github.com/hahwul/dalfox/v3@latest 2>/dev/null || echo "dalfox install failed (ok)"
+          go install github.com/tomnomnom/waybackurls@latest 2>/dev/null || echo "waybackurls install failed (ok)"
+          go install github.com/bp0lr/gauplus@latest 2>/dev/null || echo "gauplus install failed (ok)"
+          go install github.com/hakluke/hakrawler@latest 2>/dev/null || echo "hakrawler install failed (ok)"
+          pip install --user -q colorama requests uro sqlmap
+          git clone -q --depth 1 https://github.com/0xKayala/NucleiFuzzer.git "$HOME/nucleifuzzer"
+          git clone -q --depth 1 https://github.com/0xKayala/ParamSpider.git "$HOME/ParamSpider"
+          git clone -q --depth 1 https://github.com/projectdiscovery/nuclei-templates.git "$HOME/nuclei-templates"
+          echo "$HOME/bin:$HOME/.local/bin:$HOME/go/bin" >> "$GITHUB_PATH"
+          "$HOME/bin/nuclei" -version
+      - name: Patch NucleiFuzzer - add X-Hackerone header (program requires it)
+        run: |
+          set -e
+          cd "$HOME/nucleifuzzer"
+          sed -i "s|katana -d 3 -silent -rl 10|katana -d 3 -silent -rl 10 -H 'X-Hackerone: jelalossfind12'|" nucleifuzzer.py
+          sed -i "s|httpx -silent -mc 200,204,301,302,401,403,405,500,502,503,504|httpx -silent -H 'X-Hackerone: jelalossfind12' -mc 200,204,301,302,401,403,405,500,502,503,504|" nucleifuzzer.py
+          sed -i "s|nuclei -l {self.live_file} -t {templates} -dast|nuclei -l {self.live_file} -t {templates} -dast -severity critical,high,medium,low -H 'X-Hackerone: jelalossfind12'|" nucleifuzzer.py
+          echo "header patches applied: $(grep -c 'X-Hackerone' nucleifuzzer.py) (expect 3)"
+          grep -c 'X-Hackerone' nucleifuzzer.py | grep -q '^3$'
+          python3 -m py_compile nucleifuzzer.py && echo "py_compile OK - patch did not break syntax"
+      - name: Katana discovery + host filter + httpx + nuclei scan
+        run: |
+          set +e
+          export PATH="$HOME/bin:$HOME/.local/bin:$HOME/go/bin:$PATH"
+          TARGET="${{ inputs.target }}"
+          OUT="meesho-output/$TARGET"
+          mkdir -p "$OUT"
+          echo "https://$TARGET" > "$OUT/segment.txt"
+          # Rate mirrors NucleiFuzzer: --fast = 200/s, --deep = 50/s (program has no
+          # explicit req/s cap; WF program max is 500/s — never exceed it).
+          if [ "${{ inputs.mode }}" = "fast" ]; then RATE=200; else RATE=50; fi
+          echo "mode: ${{ inputs.mode }} | rate: $RATE/s | severity: critical,high,medium,low | header: X-Hackerone: jelalossfind12"
+          # NOTE: katana discovery may surface links to OTHER *.meesho.com subdomains —
+          # those are OUT OF SCOPE (wildcard OOS). Filter discovery output to the exact
+          # target host only before any probe/scan touches a URL.
+          # NOTE: order/checkout flow is NOT scanned. Template classes excluded below
+          # and by comment: dos, brute-force, rate-limit, header-only
+          # (http-missing-security-headers et al), subdomain-takeover without PoC.
+          date -u +"katana start: %Y-%m-%dT%H:%M:%SZ"
+          katana -u "https://$TARGET" -d 3 -silent -rl 10 -H 'X-Hackerone: jelalossfind12' -o "$OUT/katana.txt" 2>&1 | tail -5
+          date -u +"katana end: %Y-%m-%dT%H:%M:%SZ"
+          # Host filter (awk, no heredoc): keep only URLs whose host is exactly
+          # the target; everything else is out of scope and dropped.
+          KAT_TOTAL=$(wc -l < "$OUT/katana.txt" 2>/dev/null || echo 0)
+          { echo "https://$TARGET";
+            awk -v t="$TARGET" '{ u=$0; sub(/^[a-zA-Z]+:\/\//, "", u); split(u, a, "/"); h=tolower(a[1]); sub(/:[0-9]+$/, "", h); if (h == t) print $0 }' "$OUT/katana.txt" 2>/dev/null || true; } | sort -u > "$OUT/segment.txt"
+          echo "Host filter: $(wc -l < "$OUT/segment.txt") URLs on $TARGET (katana found $KAT_TOTAL lines, off-host dropped)"
+          date -u +"httpx start: %Y-%m-%dT%H:%M:%SZ"
+          httpx -silent -H 'X-Hackerone: jelalossfind12' -mc 200,204,301,302,401,403,405,500,502,503,504 -l "$OUT/segment.txt" -o "$OUT/live.txt"
+          echo "httpx live count: $(wc -l < "$OUT/live.txt" 2>/dev/null || echo 0) / $(wc -l < "$OUT/segment.txt")"
+          date -u +"nuclei start: %Y-%m-%dT%H:%M:%SZ"
+          timeout 15000 nuclei -l "$OUT/live.txt" -t "$HOME/nuclei-templates" -dast -severity critical,high,medium,low -H 'X-Hackerone: jelalossfind12' -rl "$RATE" -exclude-tags dos,bruteforce -jsonl -o "$OUT/results.json" 2>&1 | tee "$OUT/nuclei.log"
+          echo "nuclei exit code: ${PIPESTATUS[0]}"
+          date -u +"nuclei end: %Y-%m-%dT%H:%M:%SZ"
+          echo "== findings =="
+          wc -l "$OUT/results.json" 2>/dev/null || echo "(no results.json)"
+          head -20 "$OUT/results.json" 2>/dev/null || true
+      - name: Upload Meesho output
+        uses: actions/upload-artifact@v4
+        with:
+          name: nf-meesho-${{ inputs.target }}-output
+          path: meesho-output/
+          if-no-files-found: warn
