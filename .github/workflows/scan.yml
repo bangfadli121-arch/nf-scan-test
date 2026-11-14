@@ -17,28 +17,45 @@ jobs:
           chmod +x "$HOME/bin/nuclei" "$HOME/bin/httpx"
           echo "$HOME/bin" >> "$GITHUB_PATH"
           "$HOME/bin/nuclei" -version
-          "$HOME/bin/httpx" -version
       - name: Update nuclei templates
         run: nuclei -update-templates
-      - name: Connectivity check (curl + httpx, no silent)
-        run: |
-          echo "== curl status codes =="
-          curl -s -o /dev/null -w "homepage: %{http_code} time=%{time_total}s\n" --max-time 20 https://testphp.vulnweb.com/
-          curl -s -o /dev/null -w "artists.php: %{http_code} time=%{time_total}s\n" --max-time 20 "https://testphp.vulnweb.com/artists.php?artist=1"
-          echo "== httpx verbose =="
-          echo "https://testphp.vulnweb.com/" | httpx -status-code -title -tech-detect -timeout 20
-      - name: Nuclei scan (parameterized URL, xss,sqli)
+      - name: Egress control (example.com vs testphp)
         run: |
           set +e
+          curl -s -o /dev/null -w "example.com: %{http_code} time=%{time_total}s\n" --max-time 20 https://example.com/
+          curl -s -o /dev/null -w "testphp.vulnweb.com: %{http_code} time=%{time_total}s\n" --max-time 20 https://testphp.vulnweb.com/
+          curl -s -o /dev/null -w "testasp.vulnweb.com: %{http_code} time=%{time_total}s\n" --max-time 20 http://testasp.vulnweb.com/
+          true
+      - name: Local vulnerable app + nuclei XSS proof
+        run: |
+          set +e
+          cat > /tmp/vulnapp.py << 'PYEOF'
+          from http.server import BaseHTTPRequestHandler, HTTPServer
+          from urllib.parse import urlparse, parse_qs
+          class H(BaseHTTPRequestHandler):
+              def do_GET(self):
+                  q = parse_qs(urlparse(self.path).query).get('q', [''])[0]
+                  body = "<html><body><h1>search</h1><p>results for: %s</p></body></html>" % q
+                  self.send_response(200)
+                  self.send_header('Content-Type', 'text/html')
+                  self.send_header('Content-Length', str(len(body)))
+                  self.end_headers()
+                  self.wfile.write(body.encode())
+              def log_message(self, *a): pass
+          HTTPServer(('127.0.0.1', 8000), H).serve_forever()
+          PYEOF
+          python3 /tmp/vulnapp.py &
+          sleep 2
+          curl -s "http://127.0.0.1:8000/?q=hello" | head -c 200; echo
           date -u +"scan start: %Y-%m-%dT%H:%M:%SZ"
-          nuclei -u "https://testphp.vulnweb.com/artists.php?artist=1" -tags xss,sqli -severity low,medium,high,critical -o nuclei-results.txt -silent
+          nuclei -u "http://127.0.0.1:8000/?q=test" -tags xss -severity low,medium,high,critical -o nuclei-results.txt -silent
           echo "nuclei exit code: $?"
           date -u +"scan end: %Y-%m-%dT%H:%M:%SZ"
-          wc -l nuclei-results.txt || echo "no results file"
-          cat nuclei-results.txt || true
+          echo "== findings =="
+          cat nuclei-results.txt || echo "(no results file)"
       - name: Upload results
         uses: actions/upload-artifact@v4
         with:
-          name: nf-test-results2
+          name: nf-test-results3
           path: nuclei-results.txt
           if-no-files-found: warn
