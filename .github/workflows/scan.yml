@@ -18,7 +18,7 @@ on:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 300
     steps:
       - name: Scope guard - verify registrant is Wells Fargo & Company
         run: |
@@ -70,7 +70,7 @@ jobs:
           export PATH="$HOME/bin:$HOME/.local/bin:$HOME/go/bin:$PATH"
           python3 nucleifuzzer.py --doctor || true
           date -u +"nf start: %Y-%m-%dT%H:%M:%SZ"
-          timeout 4800 python3 nucleifuzzer.py -d "${{ inputs.target }}" --${{ inputs.mode }}
+          timeout 15000 python3 nucleifuzzer.py -d "${{ inputs.target }}" --${{ inputs.mode }}
           echo "nf exit code: $?"
           date -u +"nf end: %Y-%m-%dT%H:%M:%SZ"
           echo "== output tree =="
