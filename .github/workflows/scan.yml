@@ -1,11 +1,33 @@
-name: nf-test-scan
+name: nf-scan
 on:
   workflow_dispatch:
+    inputs:
+      target:
+        description: 'Target domain (must be in the bounty program scope)'
+        required: true
+        default: 'wellsfargo.com'
+        type: string
+      mode:
+        description: 'Scan mode'
+        required: true
+        default: 'fast'
+        type: choice
+        options:
+          - fast
+          - deep
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
+      - name: Scope guard - verify registrant is Wells Fargo & Company
+        run: |
+          set -e
+          echo "Target: ${{ inputs.target }} | mode: ${{ inputs.mode }} | program: Wells Fargo Bounty (HackerOne)"
+          echo "Program rules: automated scanning allowed, max 500 req/s (nf --fast = 200/s), X-Bug-Bounty header required."
+          curl -s -m 30 "https://rdap.markmonitor.com/rdap/domain/${{ inputs.target }}" -o /tmp/rdap.json
+          grep -q "Wells Fargo & Company" /tmp/rdap.json || { echo "SCOPE GUARD FAILED: registrant is not Wells Fargo & Company - aborting"; exit 1; }
+          echo "Scope guard OK: registrant is Wells Fargo & Company"
       - name: Install full NucleiFuzzer stack
         run: |
           set -e
@@ -27,24 +49,35 @@ jobs:
           git clone -q --depth 1 https://github.com/projectdiscovery/nuclei-templates.git "$HOME/nuclei-templates"
           echo "$HOME/bin:$HOME/.local/bin:$HOME/go/bin" >> "$GITHUB_PATH"
           "$HOME/bin/nuclei" -version
-      - name: nf doctor + scan testasp (official Acunetix test site)
+      - name: Patch NucleiFuzzer - add X-Bug-Bounty header (program requires it)
+        run: |
+          set -e
+          cd "$HOME/nucleifuzzer"
+          sed -i 's|katana -d 3 -silent -rl 10|katana -d 3 -silent -rl 10 -H "X-Bug-Bounty: NucleiFuzzer"|' nucleifuzzer.py
+          sed -i 's|httpx -silent -mc 200,204,301,302,401,403,405,500,502,503,504|httpx -silent -H "X-Bug-Bounty: NucleiFuzzer" -mc 200,204,301,302,401,403,405,500,502,503,504|' nucleifuzzer.py
+          sed -i 's|nuclei -l {self.live_file} -t {templates} -dast|nuclei -l {self.live_file} -t {templates} -dast -H "X-Bug-Bounty: NucleiFuzzer"|' nucleifuzzer.py
+          echo "header patches applied: $(grep -c 'X-Bug-Bounty' nucleifuzzer.py) (expect 3)"
+          grep -c 'X-Bug-Bounty' nucleifuzzer.py | grep -q '^3$'
+      - name: nf doctor + scan target
         run: |
           set +e
           cd "$HOME/nucleifuzzer"
           export PATH="$HOME/bin:$HOME/.local/bin:$HOME/go/bin:$PATH"
           python3 nucleifuzzer.py --doctor || true
           date -u +"nf start: %Y-%m-%dT%H:%M:%SZ"
-          timeout 1500 python3 nucleifuzzer.py -d testasp.vulnweb.com --fast
+          timeout 3300 python3 nucleifuzzer.py -d "${{ inputs.target }}" --${{ inputs.mode }}
           echo "nf exit code: $?"
           date -u +"nf end: %Y-%m-%dT%H:%M:%SZ"
           echo "== output tree =="
-          find output -type f 2>/dev/null | head -30
+          find output -type f 2>/dev/null | head -40
           echo "== findings (validated + raw head) =="
-          cat output/testasp.vulnweb.com/validated.txt 2>/dev/null | head -20 || echo "(no validated.txt)"
-          wc -l output/testasp.vulnweb.com/*.txt 2>/dev/null || true
+          cat "output/${{ inputs.target }}/validated.txt" 2>/dev/null | head -20 || echo "(no validated.txt)"
+          wc -l "output/${{ inputs.target }}/"*.txt 2>/dev/null || true
+          echo "== results.json count =="
+          wc -l "output/${{ inputs.target }}/results.json" 2>/dev/null || echo "(no results.json)"
       - name: Upload nf output
         uses: actions/upload-artifact@v4
         with:
-          name: nf-testasp-output
+          name: nf-${{ inputs.target }}-output
           path: ~/nucleifuzzer/output/
           if-no-files-found: warn
