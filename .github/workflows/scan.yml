@@ -16,8 +16,8 @@ jobs:
           unzip -o -q /tmp/httpx.zip -d "$HOME/bin" httpx
           chmod +x "$HOME/bin/nuclei" "$HOME/bin/httpx"
           echo "$HOME/bin" >> "$GITHUB_PATH"
-          nuclei -version
-          httpx -version
+          "$HOME/bin/nuclei" -version
+          "$HOME/bin/httpx" -version
       - name: Update nuclei templates
         run: nuclei -update-templates
       - name: Probe target
