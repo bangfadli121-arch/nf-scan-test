@@ -16,9 +16,8 @@ jobs:
           unzip -o -q /tmp/httpx.zip -d "$HOME/bin" httpx
           curl -sL -o /tmp/katana.zip https://github.com/projectdiscovery/katana/releases/download/v1.8.0/katana_1.8.0_linux_amd64.zip
           unzip -o -q /tmp/katana.zip -d "$HOME/bin" katana
-          curl -sL -o /tmp/dalfox.zip https://github.com/hahwul/dalfox/releases/download/v3.3.0/dalfox_3.3.0_linux_amd64.zip
-          unzip -o -q /tmp/dalfox.zip -d "$HOME/bin" dalfox
-          chmod +x "$HOME/bin/nuclei" "$HOME/bin/httpx" "$HOME/bin/katana" "$HOME/bin/dalfox"
+          chmod +x "$HOME/bin/nuclei" "$HOME/bin/httpx" "$HOME/bin/katana"
+          go install github.com/hahwul/dalfox/v3@latest 2>/dev/null || echo "dalfox install failed (ok)"
           go install github.com/tomnomnom/waybackurls@latest 2>/dev/null || echo "waybackurls install failed (ok)"
           go install github.com/bp0lr/gauplus@latest 2>/dev/null || echo "gauplus install failed (ok)"
           go install github.com/hakluke/hakrawler@latest 2>/dev/null || echo "hakrawler install failed (ok)"
