@@ -1,4 +1,9 @@
 # nf-scan-meesho — NucleiFuzzer scan untuk program HackerOne Meesho (meesho_bbp)
+# v2 (15 Nov 2026): katana alone found only 1 URL on www.meesho.com
+# (run 43612918670, SPA JS-heavy) — added gauplus + waybackurls discovery
+# BEFORE katana, katana -d 5 + conditional -jc (JS crawl, only if Chrome
+# exists on runner), default target prod.meeshoapi.com. Scope guard, header,
+# rates, severity, exclude-tags, timeouts, artefak: TIDAK berubah.
 #
 # ATURAN PROGRAM (baca sebelum dispatch — dari policy resmi 14 Nov 2026):
 # - Submit GRATIS, tanpa gate reputasi (Signal 0.0 cukup), safe harbor bersyarat.
@@ -25,7 +30,7 @@ on:
       target:
         description: 'Meesho in-scope host to scan (ONLY these 9 — wildcards are OOS)'
         required: true
-        default: 'www.meesho.com'
+        default: 'prod.meeshoapi.com'
         type: choice
         options:
           - www.meesho.com
@@ -117,15 +122,30 @@ jobs:
           # NOTE: order/checkout flow is NOT scanned. Template classes excluded below
           # and by comment: dos, brute-force, rate-limit, header-only
           # (http-missing-security-headers et al), subdomain-takeover without PoC.
+          # v2 discovery fix: katana alone found only 1 URL on www.meesho.com
+          # (run 43612918670 — SPA JS-heavy). Add gauplus + waybackurls (archive
+          # sources: they NEVER touch the target, so no rate/program concern)
+          # BEFORE katana, then merge all three sources and filter to the exact
+          # target host. gauplus/waybackurls are installed in the install step.
+          date -u +"discovery start: %Y-%m-%dT%H:%M:%SZ"
+          : > "$OUT/gau.txt"; : > "$OUT/wayback.txt"; : > "$OUT/katana.txt"
+          timeout 600 gauplus -t 5 --random-agent -o "$OUT/gau.txt" <<< "$TARGET" 2>&1 | tail -2 || true
+          timeout 600 bash -c 'echo "$0" | waybackurls' "$TARGET" > "$OUT/wayback.txt" 2>/dev/null || true
+          date -u +"discovery end: %Y-%m-%dT%H:%M:%SZ"
+          # katana JS crawl (-jc) only if a headless Chrome exists on the runner;
+          # ubuntu-latest normally ships google-chrome, but never assume it.
+          if command -v google-chrome >/dev/null 2>&1 || command -v chromium-browser >/dev/null 2>&1 || command -v chromium >/dev/null 2>&1; then JC="-jc"; echo "katana js-crawl: ON (Chrome found)"; else JC=""; echo "katana js-crawl: OFF (no Chrome on runner)"; fi
           date -u +"katana start: %Y-%m-%dT%H:%M:%SZ"
-          katana -u "https://$TARGET" -d 3 -silent -rl 10 -H 'X-Hackerone: jelalossfind12' -o "$OUT/katana.txt" 2>&1 | tail -5
+          katana -u "https://$TARGET" -d 5 -silent -rl 10 $JC -H 'X-Hackerone: jelalossfind12' -o "$OUT/katana.txt" 2>&1 | tail -5
           date -u +"katana end: %Y-%m-%dT%H:%M:%SZ"
           # Host filter (awk, no heredoc): keep only URLs whose host is exactly
           # the target; everything else is out of scope and dropped.
           KAT_TOTAL=$(wc -l < "$OUT/katana.txt" 2>/dev/null || echo 0)
+          GAU_TOTAL=$(wc -l < "$OUT/gau.txt" 2>/dev/null || echo 0)
+          WB_TOTAL=$(wc -l < "$OUT/wayback.txt" 2>/dev/null || echo 0)
           { echo "https://$TARGET";
-            awk -v t="$TARGET" '{ u=$0; sub(/^[a-zA-Z]+:\/\//, "", u); split(u, a, "/"); h=tolower(a[1]); sub(/:[0-9]+$/, "", h); if (h == t) print $0 }' "$OUT/katana.txt" 2>/dev/null || true; } | sort -u > "$OUT/segment.txt"
-          echo "Host filter: $(wc -l < "$OUT/segment.txt") URLs on $TARGET (katana found $KAT_TOTAL lines, off-host dropped)"
+            awk -v t="$TARGET" '{ u=$0; sub(/^[a-zA-Z]+:\/\//, "", u); split(u, a, "/"); h=tolower(a[1]); sub(/:[0-9]+$/, "", h); if (h == t) print $0 }' "$OUT/katana.txt" "$OUT/gau.txt" "$OUT/wayback.txt" 2>/dev/null || true; } | sort -u > "$OUT/segment.txt"
+          echo "Discovery: katana $KAT_TOTAL + gau $GAU_TOTAL + wayback $WB_TOTAL lines -> $(wc -l < "$OUT/segment.txt") URLs on $TARGET (off-host dropped)"
           date -u +"httpx start: %Y-%m-%dT%H:%M:%SZ"
           httpx -silent -H 'X-Hackerone: jelalossfind12' -mc 200,204,301,302,401,403,405,500,502,503,504 -l "$OUT/segment.txt" -o "$OUT/live.txt"
           echo "httpx live count: $(wc -l < "$OUT/live.txt" 2>/dev/null || echo 0) / $(wc -l < "$OUT/segment.txt")"
