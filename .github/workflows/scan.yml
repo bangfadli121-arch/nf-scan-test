@@ -53,11 +53,12 @@ jobs:
         run: |
           set -e
           cd "$HOME/nucleifuzzer"
-          sed -i 's|katana -d 3 -silent -rl 10|katana -d 3 -silent -rl 10 -H "X-Bug-Bounty: NucleiFuzzer"|' nucleifuzzer.py
-          sed -i 's|httpx -silent -mc 200,204,301,302,401,403,405,500,502,503,504|httpx -silent -H "X-Bug-Bounty: NucleiFuzzer" -mc 200,204,301,302,401,403,405,500,502,503,504|' nucleifuzzer.py
-          sed -i 's|nuclei -l {self.live_file} -t {templates} -dast|nuclei -l {self.live_file} -t {templates} -dast -H "X-Bug-Bounty: NucleiFuzzer"|' nucleifuzzer.py
+          sed -i "s|katana -d 3 -silent -rl 10|katana -d 3 -silent -rl 10 -H 'X-Bug-Bounty: NucleiFuzzer'|" nucleifuzzer.py
+          sed -i "s|httpx -silent -mc 200,204,301,302,401,403,405,500,502,503,504|httpx -silent -H 'X-Bug-Bounty: NucleiFuzzer' -mc 200,204,301,302,401,403,405,500,502,503,504|" nucleifuzzer.py
+          sed -i "s|nuclei -l {self.live_file} -t {templates} -dast|nuclei -l {self.live_file} -t {templates} -dast -H 'X-Bug-Bounty: NucleiFuzzer'|" nucleifuzzer.py
           echo "header patches applied: $(grep -c 'X-Bug-Bounty' nucleifuzzer.py) (expect 3)"
           grep -c 'X-Bug-Bounty' nucleifuzzer.py | grep -q '^3$'
+          python3 -m py_compile nucleifuzzer.py && echo "py_compile OK - patch did not break syntax"
       - name: nf doctor + scan target
         run: |
           set +e
