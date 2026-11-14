@@ -1,0 +1,123 @@
+name: nf-scan-segment
+on:
+  workflow_dispatch:
+    inputs:
+      segment:
+        description: 'Segment file to scan (under segments/, one URL per line)'
+        required: true
+        default: 'seg-01'
+        type: choice
+        options:
+          - seg-01
+          - seg-02
+          - seg-03
+          - seg-04
+          - seg-05
+      mode:
+        description: 'Scan mode (deep = 50 req/s, fast = 200 req/s)'
+        required: true
+        default: 'deep'
+        type: choice
+        options:
+          - fast
+          - deep
+jobs:
+  scan-segment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - name: Checkout repo (segment lists live here)
+        uses: actions/checkout@v4
+      - name: Scope guard - verify registrant is Wells Fargo & Company + every URL in scope
+        run: |
+          set -e
+          SEG_FILE="segments/locations-en-${{ inputs.segment }}.txt"
+          echo "Segment: ${{ inputs.segment }} | file: $SEG_FILE | mode: ${{ inputs.mode }} | program: Wells Fargo Bounty (HackerOne)"
+          echo "Program rules: automated scanning allowed, max 500 req/s (nf --fast = 200/s, nf --deep = 50/s), X-Bug-Bounty header required."
+          test -f "$SEG_FILE" || { echo "SCOPE GUARD FAILED: segment file $SEG_FILE not found in repo - aborting"; exit 1; }
+          # Registrable domain = last two labels (subdomains verify via parent, e.g. locations.wellsfargo.com -> wellsfargo.com)
+          curl -s -m 30 "https://rdap.markmonitor.com/rdap/domain/wellsfargo.com" -o /tmp/rdap.json
+          grep -q "Wells Fargo & Company" /tmp/rdap.json || { echo "SCOPE GUARD FAILED: registrant of wellsfargo.com is not Wells Fargo & Company - aborting"; exit 1; }
+          echo "Scope guard OK (RDAP): wellsfargo.com is Wells Fargo & Company"
+          # Every URL in the segment file must belong to *.wellsfargo.com - nothing third-party may be scanned
+          N=$(grep -c . "$SEG_FILE" || true)
+          test "$N" -gt 0 || { echo "SCOPE GUARD FAILED: segment file $SEG_FILE is empty - aborting"; exit 1; }
+          python3 - "$SEG_FILE" <<'PYEOF'
+          import sys
+          from urllib.parse import urlparse
+          bad = []
+          n = 0
+          for line in open(sys.argv[1]):
+              u = line.strip()
+              if not u:
+                  continue
+              n += 1
+              host = (urlparse(u).hostname or "").lower()
+              if host != "wellsfargo.com" and not host.endswith(".wellsfargo.com"):
+                  bad.append(u)
+          if bad:
+              print("SCOPE GUARD FAILED: %d URL(s) outside *.wellsfargo.com, e.g. %s - aborting" % (len(bad), bad[:3]))
+              sys.exit(1)
+          print("Scope guard OK (URLs): %d URLs, all under *.wellsfargo.com" % n)
+          PYEOF
+      - name: Install full NucleiFuzzer stack
+        run: |
+          set -e
+          mkdir -p "$HOME/bin"
+          curl -sL -o /tmp/nuclei.zip https://github.com/projectdiscovery/nuclei/releases/download/v3.11.1/nuclei_3.11.1_linux_amd64.zip
+          unzip -o -q /tmp/nuclei.zip -d "$HOME/bin" nuclei
+          curl -sL -o /tmp/httpx.zip https://github.com/projectdiscovery/httpx/releases/download/v1.12.0/httpx_1.12.0_linux_amd64.zip
+          unzip -o -q /tmp/httpx.zip -d "$HOME/bin" httpx
+          curl -sL -o /tmp/katana.zip https://github.com/projectdiscovery/katana/releases/download/v1.8.0/katana_1.8.0_linux_amd64.zip
+          unzip -o -q /tmp/katana.zip -d "$HOME/bin" katana
+          chmod +x "$HOME/bin/nuclei" "$HOME/bin/httpx" "$HOME/bin/katana"
+          go install github.com/hahwul/dalfox/v3@latest 2>/dev/null || echo "dalfox install failed (ok)"
+          go install github.com/tomnomnom/waybackurls@latest 2>/dev/null || echo "waybackurls install failed (ok)"
+          go install github.com/bp0lr/gauplus@latest 2>/dev/null || echo "gauplus install failed (ok)"
+          go install github.com/hakluke/hakrawler@latest 2>/dev/null || echo "hakrawler install failed (ok)"
+          pip install --user -q colorama requests uro sqlmap
+          git clone -q --depth 1 https://github.com/0xKayala/NucleiFuzzer.git "$HOME/nucleifuzzer"
+          git clone -q --depth 1 https://github.com/0xKayala/ParamSpider.git "$HOME/ParamSpider"
+          git clone -q --depth 1 https://github.com/projectdiscovery/nuclei-templates.git "$HOME/nuclei-templates"
+          echo "$HOME/bin:$HOME/.local/bin:$HOME/go/bin" >> "$GITHUB_PATH"
+          "$HOME/bin/nuclei" -version
+      - name: Patch NucleiFuzzer - add X-Bug-Bounty header (program requires it)
+        run: |
+          set -e
+          cd "$HOME/nucleifuzzer"
+          sed -i "s|katana -d 3 -silent -rl 10|katana -d 3 -silent -rl 10 -H 'X-Bug-Bounty: NucleiFuzzer'|" nucleifuzzer.py
+          sed -i "s|httpx -silent -mc 200,204,301,302,401,403,405,500,502,503,504|httpx -silent -H 'X-Bug-Bounty: NucleiFuzzer' -mc 200,204,301,302,401,403,405,500,502,503,504|" nucleifuzzer.py
+          sed -i "s|nuclei -l {self.live_file} -t {templates} -dast|nuclei -l {self.live_file} -t {templates} -dast -severity critical,high,medium,low -H 'X-Bug-Bounty: NucleiFuzzer'|" nucleifuzzer.py
+          echo "header patches applied: $(grep -c 'X-Bug-Bounty' nucleifuzzer.py) (expect 3)"
+          grep -c 'X-Bug-Bounty' nucleifuzzer.py | grep -q '^3$'
+          python3 -m py_compile nucleifuzzer.py && echo "py_compile OK - patch did not break syntax"
+      - name: Re-validate segment URLs + nuclei scan (same severity/header/rate as scan.yml)
+        run: |
+          set +e
+          export PATH="$HOME/bin:$HOME/.local/bin:$HOME/go/bin:$PATH"
+          SEG_FILE="segments/locations-en-${{ inputs.segment }}.txt"
+          OUT="segment-output/locations-en-${{ inputs.segment }}"
+          mkdir -p "$OUT"
+          cp "$SEG_FILE" "$OUT/segment.txt"
+          # Rate mirrors NucleiFuzzer: --fast = 200/s, --deep = 50/s (program max is 500/s)
+          if [ "${{ inputs.mode }}" = "fast" ]; then RATE=200; else RATE=50; fi
+          echo "mode: ${{ inputs.mode }} | rate: $RATE/s | severity: critical,high,medium,low | header: X-Bug-Bounty: NucleiFuzzer"
+          # NOTE: NucleiFuzzer -d would re-run full discovery (gau/katana/wayback) for a
+          # domain; a segment is an explicit URL list, so discovery is skipped and nuclei
+          # runs directly on the list with the same flags the patched nf uses.
+          date -u +"httpx start: %Y-%m-%dT%H:%M:%SZ"
+          httpx -silent -H 'X-Bug-Bounty: NucleiFuzzer' -mc 200,204,301,302,401,403,405,500,502,503,504 -l "$SEG_FILE" -o "$OUT/live.txt"
+          echo "httpx live count: $(wc -l < "$OUT/live.txt" 2>/dev/null || echo 0) / $(wc -l < "$SEG_FILE")"
+          date -u +"nuclei start: %Y-%m-%dT%H:%M:%SZ"
+          timeout 15000 nuclei -l "$OUT/live.txt" -t "$HOME/nuclei-templates" -dast -severity critical,high,medium,low -H 'X-Bug-Bounty: NucleiFuzzer' -rl "$RATE" -jsonl -o "$OUT/results.json" 2>&1 | tee "$OUT/nuclei.log"
+          echo "nuclei exit code: ${PIPESTATUS[0]}"
+          date -u +"nuclei end: %Y-%m-%dT%H:%M:%SZ"
+          echo "== findings =="
+          wc -l "$OUT/results.json" 2>/dev/null || echo "(no results.json)"
+          head -20 "$OUT/results.json" 2>/dev/null || true
+      - name: Upload segment output
+        uses: actions/upload-artifact@v4
+        with:
+          name: nf-locations-en-${{ inputs.segment }}-output
+          path: segment-output/
+          if-no-files-found: warn
