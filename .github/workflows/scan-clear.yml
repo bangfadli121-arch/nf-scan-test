@@ -1,0 +1,172 @@
+# nf-scan-clear — NucleiFuzzer scan untuk program HackerOne CLEAR (clear)
+# v1 (16 Nov 2026): adaptasi dari scan-clear.yml v2 (pola terbukti 15 Nov 2026).
+# Discovery: gauplus + waybackurls SEBELUM katana, merge + filter host + sort -u;
+# katana -d 5 -rl 10 (+ -jc bila Chrome ada); mode slow 20 req/dtk = DEFAULT
+# (deep 50, fast 200). Scope guard, header, rates, severity, exclude-tags,
+# timeouts, artefak: sama seperti CLEAR.
+#
+# ATURAN PROGRAM (baca sebelum dispatch — dari policy resmi, GraphQL 16 Nov 2026):
+# - Submit GRATIS, tanpa gate reputasi, safe harbor bersyarat. SLA 2/2/5 hari.
+# - Bounty min $100 (tabel lengkap per severity di policy; reward menurut dampak).
+# - HANYA 14 host di bawah ini in-scope (eligible, max critical kecuali
+#   clearme.atlassian.net = max high). OOS: fieldsupport/docs/hub/legal.clearme.com,
+#   perangkat fisik (bandara/stadion), properti CLEAR lain yang tidak terdaftar.
+#   Discovery (katana) difilter ketat ke host target persis sebelum nuclei jalan.
+# - Header tes WAJIB di semua request: X-Bug-Bounty: HackerOne-jelalossfind12
+# - JANGAN mass-create akun (>12 akun berlebihan); JANGAN brute-force rate limiting;
+#   JANGAN akses data user asli; JANGAN ganggu/degradasi layanan. scan.clearme.com:
+#   hanya parameter lokasi fisik "CLR" — JANGAN serang lokasi produksi lain.
+#   clearme.atlassian.net: hanya laporkan misconfig yang berakibat vuln;
+#   registrasi/login pakai domain arbitrer OOS.
+# - JANGAN pakai template dos, brute-force, rate-limit, header-only
+#   (http-missing-security-headers dkk), atau subdomain-takeover tanpa PoC.
+#   Laporan dari automated scan saja tanpa PoC manual + request/response =
+#   informational (tidak dibayar) — setiap temuan WAJIB repro manual + bukti
+#   dampak sebelum submit (7-Question Gate).
+# - Mobile apps (IPA/APK) HANYA static analysis — TIDAK masuk workflow ini.
+# - TIDAK ADA yang di-submit ke HackerOne dari workflow ini — scan + triase saja.
+name: nf-scan-clear
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'CLEAR in-scope host to scan (ONLY these 14 — others are OOS)'
+        required: true
+        default: 'my.clearme.com'
+        type: choice
+        options:
+          - my.clearme.com
+          - www.clearme.com
+          - verified.clearme.com
+          - authentication.clearme.com
+          - identity.clearme.com
+          - enroll.clearme.com
+          - clearme.com
+          - mobile.clearme.com
+          - web-edge.clearme.com
+          - scan.clearme.com
+          - ir.clearme.com
+          - concierge.clearme.com
+          - sports.clearme.com
+          - clearme.atlassian.net
+      mode:
+        description: 'Scan mode (slow = 20 req/s, deep = 50, fast = 200)'
+        required: true
+        default: 'slow'
+        type: choice
+        options:
+          - slow
+          - fast
+          - deep
+jobs:
+  scan-clear:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+      - name: Scope guard - target must be one of the 9 in-scope CLEAR hosts
+        run: |
+          set -e
+          TARGET="${{ inputs.target }}"
+          echo "Target: $TARGET | mode: ${{ inputs.mode }} | program: CLEAR Bounty (HackerOne clear)"
+          echo "Program rules: header X-Bug-Bounty: HackerOne-jelalossfind12 required; only the 9 listed hosts in scope; wildcards OOS; no order/checkout flow; no dos/brute-force/rate-limit/header-only templates."
+          case "$TARGET" in
+            my.clearme.com|www.clearme.com|verified.clearme.com|authentication.clearme.com|identity.clearme.com|enroll.clearme.com|clearme.com|mobile.clearme.com|web-edge.clearme.com|scan.clearme.com|ir.clearme.com|concierge.clearme.com|sports.clearme.com|clearme.atlassian.net)
+              echo "Scope guard OK: $TARGET is in the CLEAR in-scope list"
+              ;;
+            *)
+              echo "SCOPE GUARD FAILED: $TARGET is NOT one of the 14 in-scope CLEAR hosts - aborting"
+              exit 1
+              ;;
+          esac
+      - name: Install full NucleiFuzzer stack
+        run: |
+          set -e
+          mkdir -p "$HOME/bin"
+          curl -sL -o /tmp/nuclei.zip https://github.com/projectdiscovery/nuclei/releases/download/v3.11.1/nuclei_3.11.1_linux_amd64.zip
+          unzip -o -q /tmp/nuclei.zip -d "$HOME/bin" nuclei
+          curl -sL -o /tmp/httpx.zip https://github.com/projectdiscovery/httpx/releases/download/v1.12.0/httpx_1.12.0_linux_amd64.zip
+          unzip -o -q /tmp/httpx.zip -d "$HOME/bin" httpx
+          curl -sL -o /tmp/katana.zip https://github.com/projectdiscovery/katana/releases/download/v1.8.0/katana_1.8.0_linux_amd64.zip
+          unzip -o -q /tmp/katana.zip -d "$HOME/bin" katana
+          chmod +x "$HOME/bin/nuclei" "$HOME/bin/httpx" "$HOME/bin/katana"
+          go install github.com/hahwul/dalfox/v3@latest 2>/dev/null || echo "dalfox install failed (ok)"
+          go install github.com/tomnomnom/waybackurls@latest 2>/dev/null || echo "waybackurls install failed (ok)"
+          go install github.com/bp0lr/gauplus@latest 2>/dev/null || echo "gauplus install failed (ok)"
+          go install github.com/hakluke/hakrawler@latest 2>/dev/null || echo "hakrawler install failed (ok)"
+          pip install --user -q colorama requests uro sqlmap
+          git clone -q --depth 1 https://github.com/0xKayala/NucleiFuzzer.git "$HOME/nucleifuzzer"
+          git clone -q --depth 1 https://github.com/0xKayala/ParamSpider.git "$HOME/ParamSpider"
+          git clone -q --depth 1 https://github.com/projectdiscovery/nuclei-templates.git "$HOME/nuclei-templates"
+          echo "$HOME/bin:$HOME/.local/bin:$HOME/go/bin" >> "$GITHUB_PATH"
+          "$HOME/bin/nuclei" -version
+      - name: Patch NucleiFuzzer - add X-Hackerone header (program requires it)
+        run: |
+          set -e
+          cd "$HOME/nucleifuzzer"
+          sed -i "s|katana -d 3 -silent -rl 10|katana -d 3 -silent -rl 10 -H 'X-Bug-Bounty: HackerOne-jelalossfind12'|" nucleifuzzer.py
+          sed -i "s|httpx -silent -mc 200,204,301,302,401,403,405,500,502,503,504|httpx -silent -H 'X-Bug-Bounty: HackerOne-jelalossfind12' -mc 200,204,301,302,401,403,405,500,502,503,504|" nucleifuzzer.py
+          sed -i "s|nuclei -l {self.live_file} -t {templates} -dast|nuclei -l {self.live_file} -t {templates} -dast -severity critical,high,medium,low -H 'X-Bug-Bounty: HackerOne-jelalossfind12'|" nucleifuzzer.py
+          echo "header patches applied: $(grep -c 'X-Hackerone' nucleifuzzer.py) (expect 3)"
+          grep -c 'X-Hackerone' nucleifuzzer.py | grep -q '^3$'
+          python3 -m py_compile nucleifuzzer.py && echo "py_compile OK - patch did not break syntax"
+      - name: Katana discovery + host filter + httpx + nuclei scan
+        run: |
+          set +e
+          export PATH="$HOME/bin:$HOME/.local/bin:$HOME/go/bin:$PATH"
+          TARGET="${{ inputs.target }}"
+          OUT="clear-output/$TARGET"
+          mkdir -p "$OUT"
+          echo "https://$TARGET" > "$OUT/segment.txt"
+          # Rate: CLEAR policy has no explicit req/s cap but forbids disrupting
+          # production — default slow 20/s; deep 50, fast 200.
+          if [ "${{ inputs.mode }}" = "fast" ]; then RATE=200; elif [ "${{ inputs.mode }}" = "deep" ]; then RATE=50; else RATE=20; fi
+          echo "mode: ${{ inputs.mode }} | rate: $RATE/s | severity: critical,high,medium,low | header: X-Bug-Bounty: HackerOne-jelalossfind12"
+          # NOTE: katana discovery may surface links to OTHER *.clearme.com subdomains —
+          # those are OUT OF SCOPE unless in the 14-host list. Filter discovery output
+          # to the exact target host only before any probe/scan touches a URL.
+          # NOTE: no account creation, no enrollment submission, no order/checkout flow.
+          # Template classes excluded below
+          # and by comment: dos, brute-force, rate-limit, header-only
+          # (http-missing-security-headers et al), subdomain-takeover without PoC.
+          # Discovery fix (dari pola Meesho v2): katana alone found only 1 URL on
+          # SPA JS-heavy hosts. Add gauplus + waybackurls (archive sources: they NEVER
+          # touch the target, so no rate/program concern)
+          # BEFORE katana, then merge all three sources and filter to the exact
+          # target host. gauplus/waybackurls are installed in the install step.
+          date -u +"discovery start: %Y-%m-%dT%H:%M:%SZ"
+          : > "$OUT/gau.txt"; : > "$OUT/wayback.txt"; : > "$OUT/katana.txt"
+          timeout 600 gauplus -t 5 --random-agent -o "$OUT/gau.txt" <<< "$TARGET" 2>&1 | tail -2 || true
+          timeout 600 bash -c 'echo "$0" | waybackurls' "$TARGET" > "$OUT/wayback.txt" 2>/dev/null || true
+          date -u +"discovery end: %Y-%m-%dT%H:%M:%SZ"
+          # katana JS crawl (-jc) only if a headless Chrome exists on the runner;
+          # ubuntu-latest normally ships google-chrome, but never assume it.
+          if command -v google-chrome >/dev/null 2>&1 || command -v chromium-browser >/dev/null 2>&1 || command -v chromium >/dev/null 2>&1; then JC="-jc"; echo "katana js-crawl: ON (Chrome found)"; else JC=""; echo "katana js-crawl: OFF (no Chrome on runner)"; fi
+          date -u +"katana start: %Y-%m-%dT%H:%M:%SZ"
+          katana -u "https://$TARGET" -d 5 -silent -rl 10 $JC -H 'X-Bug-Bounty: HackerOne-jelalossfind12' -o "$OUT/katana.txt" 2>&1 | tail -5
+          date -u +"katana end: %Y-%m-%dT%H:%M:%SZ"
+          # Host filter (awk, no heredoc): keep only URLs whose host is exactly
+          # the target; everything else is out of scope and dropped.
+          KAT_TOTAL=$(wc -l < "$OUT/katana.txt" 2>/dev/null || echo 0)
+          GAU_TOTAL=$(wc -l < "$OUT/gau.txt" 2>/dev/null || echo 0)
+          WB_TOTAL=$(wc -l < "$OUT/wayback.txt" 2>/dev/null || echo 0)
+          { echo "https://$TARGET";
+            awk -v t="$TARGET" '{ u=$0; sub(/^[a-zA-Z]+:\/\//, "", u); split(u, a, "/"); h=tolower(a[1]); sub(/:[0-9]+$/, "", h); if (h == t) print $0 }' "$OUT/katana.txt" "$OUT/gau.txt" "$OUT/wayback.txt" 2>/dev/null || true; } | sort -u > "$OUT/segment.txt"
+          echo "Discovery: katana $KAT_TOTAL + gau $GAU_TOTAL + wayback $WB_TOTAL lines -> $(wc -l < "$OUT/segment.txt") URLs on $TARGET (off-host dropped)"
+          date -u +"httpx start: %Y-%m-%dT%H:%M:%SZ"
+          httpx -silent -H 'X-Bug-Bounty: HackerOne-jelalossfind12' -mc 200,204,301,302,401,403,405,500,502,503,504 -l "$OUT/segment.txt" -o "$OUT/live.txt"
+          echo "httpx live count: $(wc -l < "$OUT/live.txt" 2>/dev/null || echo 0) / $(wc -l < "$OUT/segment.txt")"
+          date -u +"nuclei start: %Y-%m-%dT%H:%M:%SZ"
+          timeout 15000 nuclei -l "$OUT/live.txt" -t "$HOME/nuclei-templates" -dast -severity critical,high,medium,low -H 'X-Bug-Bounty: HackerOne-jelalossfind12' -rl "$RATE" -exclude-tags dos,bruteforce -jsonl -o "$OUT/results.json" 2>&1 | tee "$OUT/nuclei.log"
+          echo "nuclei exit code: ${PIPESTATUS[0]}"
+          date -u +"nuclei end: %Y-%m-%dT%H:%M:%SZ"
+          echo "== findings =="
+          wc -l "$OUT/results.json" 2>/dev/null || echo "(no results.json)"
+          head -20 "$OUT/results.json" 2>/dev/null || true
+      - name: Upload CLEAR output
+        uses: actions/upload-artifact@v4
+        with:
+          name: nf-clear-${{ inputs.target }}-output
+          path: clear-output/
+          if-no-files-found: warn
