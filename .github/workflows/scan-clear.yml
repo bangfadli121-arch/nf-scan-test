@@ -32,7 +32,7 @@ on:
       target:
         description: 'CLEAR in-scope host to scan (ONLY these 14 — others are OOS)'
         required: true
-        default: 'authentication.clearme.com'
+        default: 'identity.clearme.com'
         type: choice
         options:
           - my.clearme.com
