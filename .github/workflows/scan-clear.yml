@@ -65,12 +65,12 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-      - name: Scope guard - target must be one of the 9 in-scope CLEAR hosts
+      - name: Scope guard - target must be one of the 14 in-scope CLEAR hosts
         run: |
           set -e
           TARGET="${{ inputs.target }}"
           echo "Target: $TARGET | mode: ${{ inputs.mode }} | program: CLEAR Bounty (HackerOne clear)"
-          echo "Program rules: header X-Bug-Bounty: HackerOne-jelalossfind12 required; only the 9 listed hosts in scope; wildcards OOS; no order/checkout flow; no dos/brute-force/rate-limit/header-only templates."
+          echo "Program rules: header X-Bug-Bounty: HackerOne-jelalossfind12 required; only the 14 listed hosts in scope; wildcards OOS; no order/checkout flow; no dos/brute-force/rate-limit/header-only templates."
           case "$TARGET" in
             my.clearme.com|www.clearme.com|verified.clearme.com|authentication.clearme.com|identity.clearme.com|enroll.clearme.com|clearme.com|mobile.clearme.com|web-edge.clearme.com|scan.clearme.com|ir.clearme.com|concierge.clearme.com|sports.clearme.com|clearme.atlassian.net)
               echo "Scope guard OK: $TARGET is in the CLEAR in-scope list"
@@ -101,15 +101,15 @@ jobs:
           git clone -q --depth 1 https://github.com/projectdiscovery/nuclei-templates.git "$HOME/nuclei-templates"
           echo "$HOME/bin:$HOME/.local/bin:$HOME/go/bin" >> "$GITHUB_PATH"
           "$HOME/bin/nuclei" -version
-      - name: Patch NucleiFuzzer - add X-Hackerone header (program requires it)
+      - name: Patch NucleiFuzzer - add X-Bug-Bounty header (program requires it)
         run: |
           set -e
           cd "$HOME/nucleifuzzer"
           sed -i "s|katana -d 3 -silent -rl 10|katana -d 3 -silent -rl 10 -H 'X-Bug-Bounty: HackerOne-jelalossfind12'|" nucleifuzzer.py
           sed -i "s|httpx -silent -mc 200,204,301,302,401,403,405,500,502,503,504|httpx -silent -H 'X-Bug-Bounty: HackerOne-jelalossfind12' -mc 200,204,301,302,401,403,405,500,502,503,504|" nucleifuzzer.py
           sed -i "s|nuclei -l {self.live_file} -t {templates} -dast|nuclei -l {self.live_file} -t {templates} -dast -severity critical,high,medium,low -H 'X-Bug-Bounty: HackerOne-jelalossfind12'|" nucleifuzzer.py
-          echo "header patches applied: $(grep -c 'X-Hackerone' nucleifuzzer.py) (expect 3)"
-          grep -c 'X-Hackerone' nucleifuzzer.py | grep -q '^3$'
+          echo "header patches applied: $(grep -c 'X-Bug-Bounty' nucleifuzzer.py) (expect 3)"
+          grep -c 'X-Bug-Bounty' nucleifuzzer.py | grep -q '^3$'
           python3 -m py_compile nucleifuzzer.py && echo "py_compile OK - patch did not break syntax"
       - name: Katana discovery + host filter + httpx + nuclei scan
         run: |
