@@ -30,7 +30,7 @@ on:
       target:
         description: 'Meesho in-scope host to scan (ONLY these 9 — wildcards are OOS)'
         required: true
-        default: 'www.valmo.in'
+        default: 'investor.meesho.com'
         type: choice
         options:
           - www.meesho.com
