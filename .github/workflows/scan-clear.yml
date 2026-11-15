@@ -157,8 +157,15 @@ jobs:
           date -u +"httpx start: %Y-%m-%dT%H:%M:%SZ"
           httpx -silent -H 'X-Bug-Bounty: HackerOne-jelalossfind12' -mc 200,204,301,302,401,403,405,500,502,503,504 -l "$OUT/segment.txt" -o "$OUT/live.txt"
           echo "httpx live count: $(wc -l < "$OUT/live.txt" 2>/dev/null || echo 0) / $(wc -l < "$OUT/segment.txt")"
+          # v1.1 fix (16 Nov): httpx live-filter proved unreliable against CLEAR's
+          # edge — 0 live on hosts that answer 200/401/302 via curl (verified,
+          # enroll, identity), and junk-only live on www. Go-based probing hangs
+          # against this edge. Nuclei must NOT depend on httpx: feed it the union
+          # of live + all discovered URLs; dead ones just 404.
+          sort -u "$OUT/live.txt" "$OUT/segment.txt" > "$OUT/nuclei-input.txt" 2>/dev/null || cp "$OUT/segment.txt" "$OUT/nuclei-input.txt"
+          echo "nuclei input: $(wc -l < "$OUT/nuclei-input.txt") URLs (live $(wc -l < "$OUT/live.txt" 2>/dev/null || echo 0) + segment $(wc -l < "$OUT/segment.txt"))"
           date -u +"nuclei start: %Y-%m-%dT%H:%M:%SZ"
-          timeout 15000 nuclei -l "$OUT/live.txt" -t "$HOME/nuclei-templates" -dast -severity critical,high,medium,low -H 'X-Bug-Bounty: HackerOne-jelalossfind12' -rl "$RATE" -exclude-tags dos,bruteforce -jsonl -o "$OUT/results.json" 2>&1 | tee "$OUT/nuclei.log"
+          timeout 15000 nuclei -l "$OUT/nuclei-input.txt" -t "$HOME/nuclei-templates" -dast -severity critical,high,medium,low -H 'X-Bug-Bounty: HackerOne-jelalossfind12' -rl "$RATE" -exclude-tags dos,bruteforce -jsonl -o "$OUT/results.json" 2>&1 | tee "$OUT/nuclei.log"
           echo "nuclei exit code: ${PIPESTATUS[0]}"
           date -u +"nuclei end: %Y-%m-%dT%H:%M:%SZ"
           echo "== findings =="
